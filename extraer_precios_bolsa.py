@@ -11,6 +11,8 @@ import os
 import pandas as pd
 from pydataxm.pydataxm import ReadDB
 
+import procesamiento
+
 # --- Configuración ---
 # La API de XM tiene datos disponibles desde el 2000-01-01.
 FECHA_INICIO = dt.date(2000, 1, 1)
@@ -23,6 +25,7 @@ DIAS_POR_CONSULTA = 29
 # Carpeta de resultados
 RUTA_RESULTADOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Results")
 ARCHIVO_CSV = os.path.join(RUTA_RESULTADOS, "precios_bolsa_nacional.csv")
+ARCHIVO_MENSUAL = os.path.join(RUTA_RESULTADOS, "promedio_mensual.csv")
 
 # --- Funciones ---
 
@@ -35,25 +38,6 @@ def generar_rangos_fechas(inicio, fin, dias):
         rangos.append((actual, fin_rango))
         actual = fin_rango + dt.timedelta(days=1)
     return rangos
-
-
-def agregar_promedio_diario(df):
-    """Agrega una columna 'Daily Average' = promedio de las 24 horas del día."""
-    horas = [c for c in df.columns if c.startswith("Values_Hour")]
-    if horas:
-        df["Daily Average"] = df[horas].mean(axis=1)
-    return df
-
-
-def agregar_promedio_mensual(df):
-    """Agrega 'Monthly Average' = promedio del 'Daily Average' de cada mes-año."""
-    if "Daily Average" not in df.columns:
-        return df
-    fechas = pd.to_datetime(df["Date"])
-    df["Monthly Average"] = df.groupby([fechas.dt.year, fechas.dt.month])[
-        "Daily Average"
-    ].transform("mean")
-    return df
 
 
 def extraer_precios():
@@ -102,22 +86,10 @@ def extraer_precios():
 
     resultado = pd.concat(frames, ignore_index=True)
 
-    # La API devuelve el día de frontera repetido en bloques contiguos: eliminar duplicados.
-    antes = len(resultado)
-    resultado.drop_duplicates(inplace=True, ignore_index=True)
-    if antes != len(resultado):
-        print(f"\nFilas duplicadas eliminadas: {antes - len(resultado)}")
-
-    # Ordenar por fecha
-    col_fecha = [c for c in resultado.columns if "fecha" in c.lower() or "date" in c.lower()]
-    if col_fecha:
-        resultado.sort_values(by=col_fecha[0], inplace=True)
-        resultado.reset_index(drop=True, inplace=True)
-
-    # Promedio diario calculado a partir de las 24 horas (consistente con los datos).
-    resultado = agregar_promedio_diario(resultado)
-    # Promedio mensual (por mes-año) replicado en cada fila del mes.
-    resultado = agregar_promedio_mensual(resultado)
+    # Deduplicar los días frontera, ordenar cronológicamente y calcular los
+    # promedios diario y mensual a partir de las columnas horarias.
+    print()
+    resultado = procesamiento.procesar(resultado)
 
     if errores:
         print(f"\nAdvertencia: {len(errores)} rangos con error:")
@@ -138,10 +110,14 @@ def main():
         print(f"\nDatos guardados en: {ARCHIVO_CSV}")
         print(f"Total de registros: {len(df)}")
         print(f"Columnas: {list(df.columns)}")
+
+        mensual = procesamiento.serie_mensual(df)
+        mensual.to_csv(ARCHIVO_MENSUAL, index=False, encoding="utf-8-sig")
+        print(f"Serie mensual guardada en: {ARCHIVO_MENSUAL} ({len(mensual)} meses)")
+
         if not df.empty:
-            col_fecha = [c for c in df.columns if "fecha" in c.lower() or "date" in c.lower()]
-            if col_fecha:
-                print(f"Rango de fechas en datos: {df[col_fecha[0]].min()} a {df[col_fecha[0]].max()}")
+            fechas = pd.to_datetime(df[procesamiento.columna_fecha(df)])
+            print(f"Rango de fechas en datos: {fechas.min().date()} a {fechas.max().date()}")
     else:
         print("No se generó archivo CSV.")
 
